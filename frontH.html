@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+   <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: http: 'unsafe-inline' 'unsafe-eval'; connect-src 'self' https: http: wss: ws:;">
+   <title>Composteur Connecté</title>
+   <link rel="stylesheet" href="frontC.css">
+   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/date-fns/2.30.0/date-fns.min.js"></script>
+   <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+   <button class="theme-toggle" id="theme-toggle" title="Changer de thème" aria-label="Changer de thème">
+       <i class="fas fa-moon"></i>
+   </button>
+  
+   <div class="container" id="login-container">
+       <header class="header">
+           <h1><i class="fas fa-seedling"></i> Composteur Connecté</h1>
+           <p>Connexion à votre espace</p>
+       </header>
+  
+       <form id="login-form" class="login-form" autocomplete="on">
+           <div class="form-group">
+               <label for="username">Nom d'utilisateur</label>
+               <div class="input-group">
+                   <i class="fas fa-user"></i>
+                   <input type="text" id="username" name="username" required placeholder="Entrez votre nom d'utilisateur" autocomplete="username">
+               </div>
+           </div>
+           <div class="form-group">
+               <label for="password">Mot de passe</label>
+               <div class="input-group">
+                   <i class="fas fa-lock"></i>
+                   <input type="password" id="password" name="password" required placeholder="Entrez votre mot de passe" autocomplete="current-password">
+               </div>
+           </div>
+           <button type="submit" class="login-btn">
+               <i class="fas fa-sign-in-alt"></i> Se connecter
+           </button>
+           <p id="error-message" class="error-message"></p>
+       </form>
+   </div>
+
+
+   <div class="container" id="app-container" style="display: none;">
+       <header class="header">
+           <h1><i class="fas fa-seedling"></i> Composteur Connecté</h1>
+           <p>Surveillance en temps réel</p>
+           <div class="connection-status">
+               <span id="connection-icon" class="status-icon" role="img" aria-label="État de la connexion"><i class="fas fa-plug"></i></span>
+               <span id="connection-text">Connexion...</span>
+           </div>
+           <div id="username-display"></div>
+       </header>
+
+
+       <!-- Système d'onglets -->
+       <div class="tabs-container">
+           <div class="tabs" role="tablist">
+               <button class="tab-button active" data-tab="dashboard" role="tab" aria-selected="true" aria-controls="dashboard-content">
+                   <i class="fas fa-tachometer-alt"></i> Tableau de bord
+               </button>
+               <button class="tab-button" data-tab="controls" role="tab" aria-selected="false" aria-controls="controls-content">
+                   <i class="fas fa-sliders-h"></i> Contrôles
+               </button>
+               <button class="tab-button" data-tab="history" role="tab" aria-selected="false" aria-controls="history-content">
+                   <i class="fas fa-history"></i> Historique
+               </button>
+           </div>
+       </div>
+
+
+       <!-- Contenu de l'onglet Tableau de bord -->
+       <div id="dashboard-content" class="tab-content active" role="tabpanel" aria-labelledby="dashboard-tab">
+           <section class="sensor-grid">
+               <div class="sensor-card">
+                   <h3><i class="fas fa-thermometer-half"></i> Température</h3>
+                   <div class="sensor-details">
+                       <div class="current-value">
+                           <span id="current-temp" aria-live="polite">--</span>°C
+                       </div>
+                       <div class="status-details">
+                           <div class="status-line">
+                               <span class="status-label">État:</span>
+                               <span id="temp-status" class="status-value">Normal</span>
+                           </div>
+                           <div class="status-line">
+                               <span class="status-label">Optimal:</span>
+                               <span class="status-value">45-55°C</span>
+                           </div>
+                           <div class="status-line">
+                               <span class="status-label">Critique:</span>
+                               <span class="status-value">&lt;40°C ou &gt;60°C</span>
+                           </div>
+                       </div>
+                   </div>
+               </div>
+               <div class="sensor-card">
+                   <h3><i class="fas fa-tint"></i> Humidité</h3>
+                   <div class="sensor-details">
+                       <div class="current-value">
+                           <span id="current-humidity" aria-live="polite">--</span>%
+                       </div>
+                       <div class="status-details">
+                           <div class="status-line">
+                               <span class="status-label">État:</span>
+                               <span id="humidity-status" class="status-value">Normal</span>
+                           </div>
+                           <div class="status-line">
+                               <span class="status-label">Optimal:</span>
+                               <span class="status-value">40-60%</span>
+                           </div>
+                           <div class="status-line">
+                               <span class="status-label">Critique:</span>
+                               <span class="status-value">&lt;30% ou &gt;70%</span>
+                           </div>
+                       </div>
+                   </div>
+               </div>
+           </section>
+
+
+           <section class="mode-selector">
+               <span id="mode-label">Mode de Fonctionnement</span>
+               <div class="switch" id="mode-switch" role="switch" aria-checked="true" aria-labelledby="mode-label">
+                   <div class="switch-handle"></div>
+               </div>
+           </section>
+       </div>
+
+
+       <!-- Contenu de l'onglet Contrôles -->
+       <div id="controls-content" class="tab-content" role="tabpanel" aria-labelledby="controls-tab">
+           <section class="manual-controls">
+               <h2><i class="fas fa-gamepad"></i> Contrôles Manuels</h2>
+               <div class="controls-grid">
+                   <div class="control-card">
+                       <h3><i class="fas fa-faucet"></i> Arrosage</h3>
+                       <button class="control-btn" id="water-control" aria-pressed="false">
+                           <span class="status-indicator"></span>
+                           <i class="fas fa-power-off"></i> Activer
+                       </button>
+                   </div>
+               </div>
+           </section>
+       </div>
+
+
+       <!-- Contenu de l'onglet Historique -->
+       <div id="history-content" class="tab-content" role="tabpanel" aria-labelledby="history-tab">
+           <section class="historical-data">
+               <h2><i class="fas fa-chart-line"></i> Historique des Données</h2>
+              
+               <!-- Ajout du sélecteur de période -->
+               <div class="period-selector">
+                   <label for="period-select">Période :</label>
+                   <select id="period-select">
+                       <option value="hour">Dernière heure</option>
+                       <option value="day">Dernier jour</option>
+                       <option value="week" selected>Dernière semaine</option>
+                       <option value="month">Dernier mois</option>
+                       <option value="year">Dernière année</option>
+                   </select>
+                   <button id="refresh-history-btn" class="refresh-btn">
+                       <i class="fas fa-sync-alt"></i> Actualiser
+                   </button>
+               </div>
+              
+               <div class="charts-container">
+                   <div class="chart-card">
+                       <h3><i class="fas fa-thermometer-half"></i> Température</h3>
+                       <canvas id="tempChart" aria-label="Graphique de température"></canvas>
+                   </div>
+                   <div class="chart-card">
+                       <h3><i class="fas fa-tint"></i> Humidité</h3>
+                       <canvas id="humidityChart" aria-label="Graphique d'humidité"></canvas>
+                   </div>
+               </div>
+               <div id="data-history">
+                   <!-- Données historiques -->
+               </div>
+           </section>
+       </div>
+   </div>
+
+
+   <button class="logout-btn" id="logout-btn" style="display: none;" aria-label="Se déconnecter">
+       <i class="fas fa-sign-out-alt"></i> Déconnexion
+   </button>
+   <script src="frontJ.js" onerror="console.error('Erreur de chargement du script frontJ.js')"></script>
+</body>
+</html>
