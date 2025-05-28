@@ -1,135 +1,124 @@
-// proxy.js
+const http = require('http');
 const WebSocket = require('ws');
 
-
-// Configuration
+// Configuration du serveur
 const PORT = 3007;
-const REMOTE_WS_URL = 'wss://api.composteur.cielnewton.fr/ws/'; // Utilisation de wss:// au lieu de https://
-let TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiY2xpZW50IiwiaWF0IjoxNzQ0MTA2MTU3LCJleHAiOjE3NDQxMDk3NTd9.Xj2HQnpHq9SyDfrA0YEJBLSF5EgV9H0CFKz0BgcrSpI';
+const REMOTE_WS_URL = 'wss://api.composteur.cielnewton.fr/ws';
+const API_USERNAME = 'admin';
+const API_PASSWORD = 'nEwton92';
+let TOKEN = '';
 
+// Stocker les connexions actives 
+const activeConnections = new Set();
 
-// Créer un serveur WebSocket local qui servira de proxy
-const wss = new WebSocket.Server({port: PORT});
+// Créer le serveur WebSocket
+const wss = new WebSocket.Server({ noServer: true });
 
-fetch('https://api.composteur.cielnewton.fr/login', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      password: 'nEwton92'
-    })
-  })
-  .then(response => {
-    if (!response.ok) {
-      throw new Error('Identifiants incorrects');
+// Fonction pour obtenir un nouveau token
+async function getNewToken() {
+    try {
+        const response = await fetch('https://api.composteur.cielnewton.fr/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: API_USERNAME, password: API_PASSWORD })
+        });
+        const data = await response.json();
+        TOKEN = data.token;
+        console.log('Token obtenu');
+    } catch (error) {
+        console.error('Erreur token:', error);
+        TOKEN = '';
     }
-    return response.json();
-  })
-  .then(data => {
-    console.log('Token JWT reçu :', data.token);
-    // Tu peux ensuite stocker ce token, par exemple :
-    TOKEN = data.token;
-  })
-  .catch(error => {
-    console.error('Erreur de connexion :', error.message);
-  });
+}
 
 // Fonction pour créer une connexion au serveur distant
 function connectToRemoteServer(ws) {
-   console.log('Tentative de connexion au serveur distant:', REMOTE_WS_URL);
-  
-   // Créer une connexion WebSocket vers le serveur distant avec le token dans les en-têtes
-   const remoteSocket = new WebSocket(REMOTE_WS_URL, {
-       headers: {
-           'Authorization': `Bearer ${TOKEN}`
-       }
-   });
+    let isConnected = false;
+    const remoteSocket = new WebSocket(REMOTE_WS_URL, {
+        headers: { 
+            'Authorization': `Bearer ${TOKEN}`,
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': '*/*',
+            'Connection': 'Upgrade',
+            'Upgrade': 'websocket',
+            'Sec-WebSocket-Version': '13'
+        },
+        followRedirects: true,
+        rejectUnauthorized: false,
+        handshakeTimeout: 10000
+    });
 
+    remoteSocket.on('open', () => {
+        console.log('Connexion établie');
+        isConnected = true;
+        // Attendre que la connexion soit stable avant d'envoyer le message
+        setTimeout(() => {
+            if (isConnected && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'connection_established' }));
+            }
+        }, 1000);
+    });
 
-   // Quand le serveur distant est ouvert
-   remoteSocket.on('open', () => {
-       console.log('Connexion WebSocket avec le serveur distant ouverte');
-   });
+    remoteSocket.on('error', (error) => {
+        console.error('Erreur WebSocket:', error.message);
+        isConnected = false;
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'error', message: error.message }));
+        }
+    });
 
+    ws.on('message', (data) => {
+        if (isConnected && remoteSocket.readyState === WebSocket.OPEN) {
+            remoteSocket.send(data);
+        }
+    });
 
-   // Quand un message est reçu du client local
-   ws.on('message', (data) => {
-    const message = JSON.parse(data.toString());
-    console.log('Message reçu du client local:', message);
-  
-    if (remoteSocket.readyState === WebSocket.OPEN) {
-      remoteSocket.send(JSON.stringify(message)); // ✅ envoyer une string
-    } else {
-      console.log('Connexion au serveur distant non établie');
-      ws.send(JSON.stringify({ error: 'Connexion au serveur distant non établie' }));
-    }
-  });
+    remoteSocket.on('message', (data) => {
+        if (isConnected && ws.readyState === WebSocket.OPEN) {
+            ws.send(data);
+        }
+    });
 
-   // Quand un message est reçu du serveur distant
-   
-remoteSocket.on('message', (data) => {
-    const message = JSON.parse(data.toString());
-    console.log('Message reçu du serveur distant:', message);
-  
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message)); // ✅ envoyer une string
-    } else {
-      console.log('Connexion au client local non établie');
-    }
-  });
-  
+    ws.on('close', () => {
+        isConnected = false;
+        if (remoteSocket.readyState < WebSocket.CLOSING) {
+            remoteSocket.close();
+        }
+        activeConnections.delete(ws);
+    });
 
+    remoteSocket.on('close', () => {
+        isConnected = false;
+        if (ws.readyState < WebSocket.CLOSING) {
+            ws.close();
+        }
+    });
 
-   // Gérer les fermetures de connexion
-   ws.on('close', () => {
-       console.log('Connexion WebSocket avec le client local fermée');
-       if (remoteSocket.readyState === WebSocket.OPEN) {
-           remoteSocket.close();
-       }
-   });
-
-
-   remoteSocket.on('close', () => {
-       console.log('Connexion WebSocket avec le serveur distant fermée');
-       if (ws.readyState === WebSocket.OPEN) {
-           ws.close();
-       }
-   });
-
-
-   // Gérer les erreurs
-   ws.on('error', (err) => {
-       console.log('Erreur WebSocket du client local:', err);
-   });
-
-
-   remoteSocket.on('error', (err) => {
-       console.log('Erreur WebSocket du serveur distant:', err);
-       // Tentative de reconnexion après un délai
-       setTimeout(() => {
-           console.log('Tentative de reconnexion au serveur distant...');
-           if (ws.readyState === WebSocket.OPEN) {
-               connectToRemoteServer(ws);
-           }
-       }, 5000);
-   });
-
-
-   return remoteSocket;
+    return remoteSocket;
 }
 
+// Démarrer le serveur
+(async () => {
+    await getNewToken();
+    if (!TOKEN) {
+        console.error("ERREUR: Pas de token");
+        process.exit(1);
+    }
 
-// Quand un client se connecte au serveur proxy
-wss.on('connection', (ws) => {
-   console.log('Client connecté au proxy WebSocket');
-  
-   // Créer une connexion au serveur distant
-   const remoteSocket = connectToRemoteServer(ws);
-  
-   // Stocker la référence à la connexion distante
-   ws.remoteSocket = remoteSocket;
-});
+    const server = http.createServer();
+    server.on('upgrade', (request, socket, head) => {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    });
 
+    wss.on('connection', (ws) => {
+        activeConnections.add(ws);
+        connectToRemoteServer(ws);
+        ws.on('close', () => activeConnections.delete(ws));
+    });
 
-console.log(`Serveur proxy WebSocket en écoute sur ws://localhost:${PORT}`);
+    server.listen(PORT, () => {
+        console.log(`Proxy WebSocket sur ws://localhost:${PORT}`);
+    });
+})();

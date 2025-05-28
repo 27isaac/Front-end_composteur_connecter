@@ -1,10 +1,20 @@
 // Configuration & Constantes
 const WSS_URL = 'ws://localhost:3007';
 const API_URL = 'https://api.composteur.cielnewton.fr/';
-const users = [{ username: 'admin', password: 'nEwton92' }];
+const API_CONNEXION = 'https://api.composteur.cielnewton.fr/login';
+
+// Seuils de température et d'humidité
+const TEMP_MIN = 40;
+const TEMP_MAX = 60;
+const HUMIDITY_MIN = 40;
+const HUMIDITY_MAX = 60;
+
+// Intervalles de mise à jour
+const DATA_UPDATE_INTERVAL = 5000;
+const PUMP_CHECK_INTERVAL = 10000;
+
 let ws = null;
 const historicalData = [];
-
 
 // Configuration des requêtes API
 const apiConfig = {
@@ -14,11 +24,9 @@ const apiConfig = {
    }
 };
 
-
 // Importer le module WebSocket client
 // const wsClient = require('./wsClient.js');
 // Le module wsClient est chargé globalement via window.wsClient dans wsClient.js
-
 
 // Interface utilisateur
 function setTheme(theme) {
@@ -26,11 +34,9 @@ function setTheme(theme) {
    localStorage.setItem('theme', theme);
 }
 
-
 function toggleTheme() {
    setTheme(localStorage.getItem('theme') === 'light' ? 'dark' : 'light');
 }
-
 
 function checkAuth() {
    const isAuthenticated = sessionStorage.getItem('isAuthenticated');
@@ -49,8 +55,12 @@ function checkAuth() {
        appContainer.style.display = 'none';
        return false;
    }
-}
 
+   const logoutBtn = document.getElementById('logout-btn');
+   if (logoutBtn) {
+       logoutBtn.style.display = isAuthenticated === 'true' ? 'block' : 'none';
+   }
+}
 
 function showNotification(title, message, type = 'info') {
    let notification = document.querySelector('.notification');
@@ -69,7 +79,6 @@ function showNotification(title, message, type = 'info') {
        setTimeout(() => notification.remove(), 300);
    }, 3000);
 }
-
 
 // Gestion des connexions
 function updateConnectionStatus(type, status) {
@@ -99,7 +108,6 @@ function updateConnectionStatus(type, status) {
    connectionText.textContent = config.text;
 }
 
-
 function showConnectionNotification(type, status) {
    const notifications = {
        'api': {
@@ -114,13 +122,11 @@ function showConnectionNotification(type, status) {
        }
    };
 
-
    const notification = notifications[type][status];
    if (notification) {
        showNotification(notification.title, notification.message, notification.type);
    }
 }
-
 
 // Gestion de l'authentification
 async function authenticateWithServer() {
@@ -150,6 +156,7 @@ async function authenticateWithServer() {
 }
 
 let TOKEN = '';
+const password = document.getElementById('password').value;
 
 fetch('https://api.composteur.cielnewton.fr/login', {
     method: 'POST',
@@ -157,7 +164,7 @@ fetch('https://api.composteur.cielnewton.fr/login', {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      password: 'nEwton92'
+      password: password
     })
   })
   .then(response => {
@@ -174,8 +181,6 @@ fetch('https://api.composteur.cielnewton.fr/login', {
   .catch(error => {
     console.error('Erreur de connexion :', error.message);
   });
-
-
 
 // Gestion des données
 async function fetchSensorData() {
@@ -199,7 +204,7 @@ async function fetchSensorData() {
 
        const data = await response.json();
        updateConnectionStatus('api', 'connected');
-       showConnectionNotification('api', 'connected');
+       showNotification('Succès', 'Connexion API établie', 'success');
        
        return {
            temperature: data.temperature,
@@ -209,18 +214,21 @@ async function fetchSensorData() {
    } catch (error) {
        console.error('Erreur lors de la récupération des données:', error);
        updateConnectionStatus('api', 'error');
-       showConnectionNotification('api', 'error');
+       
        if (!navigator.onLine) {
-           console.error('Pas de connexion Internet');
            showNotification('Erreur réseau', 'Pas de connexion Internet', 'error');
+       } else if (error.message.includes('401')) {
+           showNotification('Erreur d\'authentification', 'Token invalide ou expiré', 'error');
+       } else if (error.message.includes('404')) {
+           showNotification('Erreur serveur', 'Ressource non trouvée', 'error');
+       } else if (error.message.includes('500')) {
+           showNotification('Erreur serveur', 'Erreur interne du serveur', 'error');
        } else {
-           console.error('Serveur inaccessible');
            showNotification('Erreur serveur', 'Impossible d\'accéder aux données', 'error');
        }
        return null;
    }
 }
-
 
 // Récupération des données historiques
 async function fetchHistoricalData(period = 'week') {
@@ -237,7 +245,6 @@ async function fetchHistoricalData(period = 'week') {
                'Content-Type': 'application/json',
                'Authorization': `Bearer ${TOKEN}`
            }
-           // Pas de body, sauf si l'API en attend un
        });
       
        if (!response.ok) {
@@ -245,19 +252,30 @@ async function fetchHistoricalData(period = 'week') {
        }
       
        const data = await response.json();
+       console.log('Données historiques brutes reçues:', data);
+      
+       // Correction du mapping pour garantir une date ISO valide
+       const formattedData = data.map(item => {
+           let time = item._time;
+           // Si c'est un timestamp numérique, convertir en ISO
+           if (typeof time === 'number') {
+               time = new Date(time).toISOString();
+           } else if (typeof time === 'string' && isNaN(Date.parse(time))) {
+               // Si la string n'est pas reconnue, essayer de la parser (à adapter si besoin)
+               // Ici, on laisse tel quel, mais on pourrait ajouter un parseur custom
+           }
+           return {
+               _time: time,
+               temperature: parseFloat(item.temperature),
+               humidite: parseFloat(item.humidite)
+           };
+       });
       
        // Vérifier si les données sont valides
-       if (!Array.isArray(data) || data.length === 0) {
+       if (!Array.isArray(formattedData) || formattedData.length === 0) {
            console.warn('Aucune donnée historique disponible');
            return [];
        }
-      
-       // Formater les données pour la compatibilité avec les fonctions existantes
-       const formattedData = data.map(item => ({
-           _time: item.timestamp,
-           temperature: parseFloat(item.temperature),
-           humidite: parseFloat(item.humidity)
-       }));
       
        updateConnectionStatus('api', 'connected');
        showConnectionNotification('api', 'connected');
@@ -272,24 +290,19 @@ async function fetchHistoricalData(period = 'week') {
    }
 }
 
-
 function handleHistoricalData(data, period = 'week') {
    if (!Array.isArray(data) || data.length === 0) return;
-  
-   // Les données sont déjà formatées dans fetchHistoricalData
+   
    window.lastHistoricalData = data;
    window.selectedPeriod = period;
-   updateHistoricalTable();
    updateHistoricalCharts(data);
 }
-
 
 // Charts et visualisation
 function initializeCharts() {
    const ctxTemp = document.getElementById('tempChart');
    const ctxHum = document.getElementById('humidityChart');
    if (!ctxTemp || !ctxHum) return;
-
 
    // Configuration commune pour les graphiques
    const chartConfig = {
@@ -301,55 +314,127 @@ function initializeCharts() {
                x: {
                    type: 'time',
                    time: {
-                       unit: 'hour',
                        displayFormats: {
-                           hour: 'HH:mm'
+                           hour: 'HH:mm',
+                           day: 'dd/MM',
+                           week: 'dd/MM',
+                           month: 'MM/yyyy'
                        }
                    },
                    title: {
                        display: true,
-                       text: 'Temps'
+                       text: 'Date et Heure',
+                       font: {
+                           size: 14,
+                           weight: 'bold'
+                       }
+                   },
+                   ticks: {
+                       autoSkip: true,
+                       maxRotation: 45,
+                       minRotation: 20
                    }
                },
                y: {
                    beginAtZero: true,
                    title: {
                        display: true,
-                       text: 'Valeur'
+                       text: 'Valeur',
+                       font: {
+                           size: 14,
+                           weight: 'bold'
+                       }
                    }
                }
            },
            plugins: {
                legend: {
-                   display: true
+                   display: true,
+                   position: 'top',
+                   labels: {
+                       font: {
+                           size: 14,
+                           weight: 'bold'
+                       }
+                   }
                },
                tooltip: {
                    mode: 'index',
-                   intersect: false
+                   intersect: false,
+                   callbacks: {
+                       label: function(context) {
+                           let label = context.dataset.label || '';
+                           if (label) {
+                               label += ': ';
+                           }
+                           if (context.parsed.y !== null) {
+                               label += context.parsed.y.toFixed(1);
+                           }
+                           return label;
+                       }
+                   }
                }
            }
        }
    };
 
-
-   // Graphique de température
+   // Graphique de température (stem plot)
    window.tempChart = new Chart(ctxTemp, {
-       ...chartConfig,
+       type: 'scatter',
        data: {
-           datasets: [{
-               label: 'Température (°C)',
-               data: [],
-               borderColor: 'rgba(255, 99, 132, 1)',
-               backgroundColor: 'rgba(255, 99, 132, 0.2)',
-               borderWidth: 2,
-               tension: 0.1,
-               fill: true
-           }]
+           datasets: [
+               // Tiges verticales
+               {
+                   type: 'line',
+                   label: 'Tiges',
+                   data: [], // sera rempli dynamiquement
+                   borderColor: 'rgba(255, 99, 132, 1)',
+                   borderWidth: 2,
+                   showLine: true,
+                   fill: false,
+                   pointRadius: 0,
+                   segment: {
+                       borderDash: [],
+                   },
+                   order: 1,
+               },
+               // Points
+               {
+                   type: 'scatter',
+                   label: 'Température (°C)',
+                   data: [],
+                   backgroundColor: 'rgba(255, 99, 132, 0.85)',
+                   borderColor: 'rgba(255, 99, 132, 1)',
+                   borderWidth: 2,
+                   pointRadius: 5,
+                   pointHoverRadius: 7,
+                   order: 2,
+               }
+           ]
        },
        options: {
            ...chartConfig.options,
+           plugins: {
+               ...chartConfig.options.plugins,
+               legend: {
+                   display: true,
+                   position: 'top',
+                   labels: {
+                       font: {
+                           size: 14,
+                           weight: 'bold'
+                       }
+                   }
+               }
+           },
            scales: {
                ...chartConfig.options.scales,
+               x: {
+                   ...chartConfig.options.scales.x,
+                   type: 'time',
+                   time: chartConfig.options.scales.x.time,
+                   ticks: chartConfig.options.scales.x.ticks
+               },
                y: {
                    ...chartConfig.options.scales.y,
                    title: {
@@ -361,25 +446,63 @@ function initializeCharts() {
        }
    });
 
-
-   // Graphique d'humidité
+   // Graphique d'humidité (stem plot)
    window.humidityChart = new Chart(ctxHum, {
-       ...chartConfig,
+       type: 'scatter',
        data: {
-           datasets: [{
-               label: 'Humidité (%)',
-               data: [],
-               borderColor: 'rgba(54, 162, 235, 1)',
-               backgroundColor: 'rgba(54, 162, 235, 0.2)',
-               borderWidth: 2,
-               tension: 0.1,
-               fill: true
-           }]
+           datasets: [
+               // Tiges verticales
+               {
+                   type: 'line',
+                   label: 'Tiges',
+                   data: [], // sera rempli dynamiquement
+                   borderColor: 'rgba(54, 162, 235, 1)',
+                   borderWidth: 2,
+                   showLine: true,
+                   fill: false,
+                   pointRadius: 0,
+                   segment: {
+                       borderDash: [],
+                   },
+                   order: 1,
+               },
+               // Points
+               {
+                   type: 'scatter',
+                   label: 'Humidité (%)',
+                   data: [],
+                   backgroundColor: 'rgba(54, 162, 235, 0.85)',
+                   borderColor: 'rgba(54, 162, 235, 1)',
+                   borderWidth: 2,
+                   pointRadius: 5,
+                   pointHoverRadius: 7,
+                   order: 2,
+               }
+           ]
        },
        options: {
            ...chartConfig.options,
+           plugins: {
+               ...chartConfig.options.plugins,
+               legend: {
+                   display: true,
+                   position: 'top',
+                   labels: {
+                       font: {
+                           size: 14,
+                           weight: 'bold'
+                       }
+                   }
+               }
+           },
            scales: {
                ...chartConfig.options.scales,
+               x: {
+                   ...chartConfig.options.scales.x,
+                   type: 'time',
+                   time: chartConfig.options.scales.x.time,
+                   ticks: chartConfig.options.scales.x.ticks
+               },
                y: {
                    ...chartConfig.options.scales.y,
                    title: {
@@ -392,91 +515,129 @@ function initializeCharts() {
    });
 }
 
+function updateHistoricalCharts(dataArray) {
+    try {
+        if (!window.tempChart || !window.humidityChart) {
+            console.error('Les graphiques ne sont pas initialisés');
+            return;
+        }
 
-function updateHistoricalCharts(newData) {
-   try {
-       // Vérifier si les graphiques sont initialisés
-       if (!window.tempChart || !window.humidityChart) {
-           console.error('Les graphiques ne sont pas initialisés');
-           return;
-       }
+        // Préparation des données pour stem plot
+        const now = Date.now();
+        const oneMonth = 31 * 24 * 60 * 60 * 1000;
+        const minValidDate = new Date('2025-01-01').getTime();
+        const tempMap = new Map();
+        const humMap = new Map();
+        if (Array.isArray(dataArray)) {
+            dataArray.forEach(data => {
+                const timestamp = new Date(data._time);
+                const t = timestamp.getTime();
+                const tempVal = (isFinite(data.temperature) && data.temperature >= TEMP_MIN && data.temperature <= TEMP_MAX) ? data.temperature : null;
+                const humVal = (isFinite(data.humidite) && data.humidite >= HUMIDITY_MIN && data.humidite <= HUMIDITY_MAX) ? data.humidite : null;
+                if (
+                    !isNaN(t) &&
+                    t > minValidDate &&
+                    t < now + oneMonth &&
+                    t !== 0
+                ) {
+                    tempMap.set(t, { x: timestamp, y: tempVal });
+                    humMap.set(t, { x: timestamp, y: humVal });
+                }
+            });
+        } else if (dataArray && dataArray._time) {
+            const timestamp = new Date(dataArray._time);
+            const t = timestamp.getTime();
+            const tempVal = (isFinite(dataArray.temperature) && dataArray.temperature >= TEMP_MIN && dataArray.temperature <= TEMP_MAX) ? dataArray.temperature : null;
+            const humVal = (isFinite(dataArray.humidite) && dataArray.humidite >= HUMIDITY_MIN && dataArray.humidite <= HUMIDITY_MAX) ? dataArray.humidite : null;
+            if (
+                !isNaN(t) &&
+                t > minValidDate &&
+                t < now + oneMonth &&
+                t !== 0
+            ) {
+                tempMap.set(t, { x: timestamp, y: tempVal });
+                humMap.set(t, { x: timestamp, y: humVal });
+            }
+        }
+        const tempData = Array.from(tempMap.values());
+        const humData = Array.from(humMap.values());
 
+        // Préparer les tiges pour stem plot
+        const tempStems = tempData.flatMap(pt => pt.y !== null ? [{ x: pt.x, y: 0 }, { x: pt.x, y: pt.y }, { x: null, y: null }] : []);
+        const humStems = humData.flatMap(pt => pt.y !== null ? [{ x: pt.x, y: 0 }, { x: pt.x, y: pt.y }, { x: null, y: null }] : []);
 
-       // Créer un point de données avec timestamp
-       const timestamp = new Date(newData._time);
-      
-       // Mettre à jour le graphique de température
-       window.tempChart.data.datasets[0].data.push({
-           x: timestamp,
-           y: newData.temperature
-       });
-      
-       // Limiter le nombre de points de données
-       if (window.tempChart.data.datasets[0].data.length > MAX_DATA_POINTS) {
-           window.tempChart.data.datasets[0].data.shift();
-       }
-      
-       // Mettre à jour le graphique d'humidité
-       window.humidityChart.data.datasets[0].data.push({
-           x: timestamp,
-           y: newData.humidite
-       });
-      
-       // Limiter le nombre de points de données
-       if (window.humidityChart.data.datasets[0].data.length > MAX_DATA_POINTS) {
-           window.humidityChart.data.datasets[0].data.shift();
-       }
-      
-       // Mettre à jour les graphiques
-       window.tempChart.update();
-       window.humidityChart.update();
-      
-       console.log('Graphiques mis à jour avec succès');
-   } catch (error) {
-       console.error('Erreur lors de la mise à jour des graphiques:', error);
-   }
+        window.tempChart.data.datasets[0].data = tempStems; // tiges
+        window.tempChart.data.datasets[1].data = tempData;  // points
+        window.humidityChart.data.datasets[0].data = humStems;
+        window.humidityChart.data.datasets[1].data = humData;
+
+        // Régler dynamiquement la date de début de l'axe X
+        if (tempData.length > 0) {
+            window.tempChart.options.scales.x.min = tempData[0].x;
+        }
+        if (humData.length > 0) {
+            window.humidityChart.options.scales.x.min = humData[0].x;
+        }
+
+        // Forcer l'axe Y du graphique d'humidité à [0, 100]
+        if (window.humidityChart.options.scales && window.humidityChart.options.scales.y) {
+            window.humidityChart.options.scales.y.min = 0;
+            window.humidityChart.options.scales.y.max = 100;
+        }
+        // Améliorer l'affichage de l'axe X (rotation, autoSkip)
+        if (window.tempChart.options.scales && window.tempChart.options.scales.x) {
+            window.tempChart.options.scales.x.ticks = {
+                autoSkip: true,
+                maxRotation: 45,
+                minRotation: 20
+            };
+        }
+        if (window.humidityChart.options.scales && window.humidityChart.options.scales.x) {
+            window.humidityChart.options.scales.x.ticks = {
+                autoSkip: true,
+                maxRotation: 45,
+                minRotation: 20
+            };
+        }
+        window.tempChart.update();
+        window.humidityChart.update();
+    } catch (error) {
+        console.error('Erreur lors de la mise à jour des graphiques:', error);
+    }
 }
-
 
 function createHistoricalTableHTML(selectedPeriod) {
-   console.log('Création du tableau historique avec la période:', selectedPeriod);
-   
-   const html = `
-       <div class="period-selector">
-           <label for="period-select">Période :</label>
-           <select id="period-select">
-               <option value="hour" ${selectedPeriod === 'hour' ? 'selected' : ''}>Dernière heure</option>
-               <option value="day" ${selectedPeriod === 'day' ? 'selected' : ''}>Dernier jour</option>
-               <option value="week" ${selectedPeriod === 'week' ? 'selected' : ''}>Dernière semaine</option>
-               <option value="month" ${selectedPeriod === 'month' ? 'selected' : ''}>Dernier mois</option>
-               <option value="year" ${selectedPeriod === 'year' ? 'selected' : ''}>Dernière année</option>
-           </select>
-           <button id="refresh-history-btn" class="refresh-btn">
-               <i class="fas fa-sync-alt"></i> Actualiser
-           </button>
-       </div>
-       <table id="historical-table">
-           <thead><tr><th>Date/Heure</th><th>Température (°C)</th><th>Humidité (%)</th></tr></thead>
-           <tbody></tbody>
-       </table>
-   `;
+    console.log('Initialisation de l\'interface historique avec la période:', selectedPeriod);
+    
+    const html = `
+        <div class="period-selector">
+            <label for="period-select">Période :</label>
+            <select id="period-select">
+                <option value="day" ${selectedPeriod === 'day' ? 'selected' : ''}>Dernier jour</option>
+                <option value="week" ${selectedPeriod === 'week' ? 'selected' : ''}>Dernière semaine</option>
+                <option value="month" ${selectedPeriod === 'month' ? 'selected' : ''}>Dernier mois</option>
+            </select>
+        </div>
+    `;
 
-   // Initialiser le bouton après l'insertion du HTML
-   requestAnimationFrame(() => {
-       const refreshBtn = document.getElementById('refresh-history-btn');
-       const periodSelect = document.getElementById('period-select');
-       console.log('Éléments trouvés:', { refreshBtn, periodSelect });
-       
-       if (refreshBtn && periodSelect) {
-           setupRefreshButton(refreshBtn, periodSelect);
-       } else {
-           console.error('Éléments non trouvés après insertion du HTML');
-       }
-   });
+    // Initialiser le sélecteur de période après l'insertion du HTML
+    requestAnimationFrame(() => {
+        const periodSelect = document.getElementById('period-select');
+        if (periodSelect) {
+            periodSelect.addEventListener('change', async () => {
+                const period = periodSelect.value;
+                const data = await fetchHistoricalData(period);
+                if (data && data.length > 0) {
+                    handleHistoricalData(data, period);
+                }
+            });
+        } else {
+            console.error('Éléments non trouvés après insertion du HTML');
+        }
+    });
 
-   return html;
+    return html;
 }
-
 
 function updateHistoricalTable() {
    const tableContainer = document.getElementById('data-history');
@@ -506,28 +667,26 @@ function updateHistoricalTable() {
   
    sortedData.slice(0, maxEntries).forEach(data => {
        const date = new Date(data._time);
-       const formattedDate = date.toLocaleDateString();
-       const formattedTime = date.toLocaleTimeString();
-       const tempColor = getColor(data.temperature, { low: 40, high: 60 });
-       const humColor = getColor(data.humidite, { low: 40, high: 60 });
+       const formattedDate = isNaN(date.getTime()) ? '--' : date.toLocaleDateString();
+       const formattedTime = isNaN(date.getTime()) ? '--' : date.toLocaleTimeString();
+       const tempColor = getColor(data.temperature, { low: TEMP_MIN, high: TEMP_MAX });
+       const humColor = getColor(data.humidite, { low: HUMIDITY_MIN, high: HUMIDITY_MAX });
 
        tbody.innerHTML += `
            <tr>
                <td>${formattedDate} ${formattedTime}</td>
-               <td style="color: ${tempColor}; font-weight: bold;">${data.temperature.toFixed(1)}</td>
-               <td style="color: ${humColor}; font-weight: bold;">${data.humidite.toFixed(1)}</td>
+               <td style="color: ${tempColor}; font-weight: bold;">${isFinite(data.temperature) ? data.temperature.toFixed(1) : '--'}</td>
+               <td style="color: ${humColor}; font-weight: bold;">${isFinite(data.humidite) ? data.humidite.toFixed(1) : '--'}</td>
            </tr>
        `;
    });
 }
-
 
 function getColor(value, thresholds) {
    if (value < thresholds.low) return '#3498db';
    if (value > thresholds.high) return '#e74c3c';
    return 'var(--primary-green)';
 }
-
 
 // Gestion des onglets
 function initTabs() {
@@ -551,33 +710,50 @@ function initTabs() {
    });
 }
 
+function updateModeUI(isAutomatic) {
+    const modeSwitch = document.getElementById('mode-switch');
+    const modeLabel = document.getElementById('mode-label');
+    const waterControl = document.getElementById('water-control');
+    if (modeSwitch && modeLabel) {
+        modeSwitch.classList.toggle('active', isAutomatic);
+        modeLabel.textContent = isAutomatic ? 'Mode Automatique' : 'Mode Manuel';
+    }
+    if (waterControl) {
+        waterControl.disabled = isAutomatic;
+        waterControl.title = isAutomatic ? 'Désactivé en mode automatique' : '';
+    }
+}
 
 function initModeSwitch() {
    const modeSwitch = document.getElementById('mode-switch');
    const modeLabel = document.getElementById('mode-label');
    if (!modeSwitch || !modeLabel) return;
 
-
    let isAutomatic = true;
    modeSwitch.classList.add('active');
    modeLabel.textContent = 'Mode Automatique';
-
 
    modeSwitch.addEventListener('click', function() {
        isAutomatic = !isAutomatic;
        modeSwitch.classList.toggle('active');
        modeLabel.textContent = isAutomatic ? 'Mode Automatique' : 'Mode Manuel';
-      
-       // Envoyer l'état du mode au serveur
+       updateModeUI(isAutomatic);
+       
+       // Envoyer l'état du mode au serveur via WebSocket
        if (ws && ws.readyState === WebSocket.OPEN) {
            ws.send(JSON.stringify({
-               type: 'mode_change',
-               mode: isAutomatic ? 'auto' : 'manual'
+               mode: isAutomatic ? 'auto' : 'manuel'
            }));
+           console.log('Changement de mode envoyé:', isAutomatic ? 'auto' : 'manuel');
+       } else {
+           showNotification('Erreur', 'WebSocket non connecté', 'error');
+           // Revenir à l'état précédent si la connexion a échoué
+           isAutomatic = !isAutomatic;
+           modeSwitch.classList.toggle('active');
+           modeLabel.textContent = isAutomatic ? 'Mode Automatique' : 'Mode Manuel';
        }
    });
 }
-
 
 // Initialisation de l'application
 async function initApp() {
@@ -589,7 +765,6 @@ async function initApp() {
        //     return;
        // }
 
-
        // Initialisation des composants
        initializeCharts();
        initWaterControl();
@@ -597,18 +772,24 @@ async function initApp() {
        initTabs();
        initWebSocket();
       
-       // Récupération des données initiales
-       const initialData = await fetchSensorData();
-       if (initialData) {
-           updateCharts(initialData.temperature, initialData.humidite);
-       } else {
-           showNotification('Attention', 'Données non disponibles', 'warning');
-       }
-      
        // Charger les données historiques initiales
        const historicalData = await fetchHistoricalData('week');
        if (historicalData) {
            handleHistoricalData(historicalData, 'week');
+       }
+
+       // Brancher l'écouteur sur le sélecteur de période (historique)
+       const periodSelect = document.getElementById('period-select');
+       if (periodSelect) {
+           periodSelect.addEventListener('change', async () => {
+               const period = periodSelect.value;
+               const data = await fetchHistoricalData(period);
+               if (data && data.length > 0) {
+                   handleHistoricalData(data, period);
+               } else {
+                   showNotification('Attention', 'Aucune donnée disponible pour cette période', 'warning');
+               }
+           });
        }
       
        // Vérification périodique de la connexion WebSocket
@@ -625,55 +806,67 @@ async function initApp() {
    }
 }
 
-
 // Event listeners
 document.addEventListener('DOMContentLoaded', () => {
-   const loginForm = document.getElementById('login-form');
-   if (loginForm) {
-       loginForm.addEventListener('submit', (e) => {
-           e.preventDefault();
-          
-           const username = document.getElementById('username').value;
-           const password = document.getElementById('password').value;
-           const errorMessage = document.getElementById('error-message');
-          
-           const user = users.find(u => u.username === username && u.password === password);
-          
-           if (user) {
-               sessionStorage.setItem('isAuthenticated', 'true');
-               sessionStorage.setItem('username', username);
-               errorMessage.textContent = '';
-               checkAuth();
-               initApp();
-           } else {
-               errorMessage.textContent = 'Identifiants incorrects';
-               document.getElementById('password').value = '';
-           }
-       });
-   }
+  const loginForm = document.getElementById('login-form');
+  if (loginForm) {
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
 
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+      const errorMessage = document.getElementById('error-message');
 
-   const themeToggle = document.getElementById('theme-toggle');
-   if (themeToggle) {
-       themeToggle.addEventListener('click', toggleTheme);
-   }
-  
-   const logoutBtn = document.getElementById('logout-btn');
-   if (logoutBtn) {
-       logoutBtn.style.display = 'block';
-       logoutBtn.addEventListener('click', () => {
-           sessionStorage.removeItem('isAuthenticated');
-           sessionStorage.removeItem('username');
-           if (ws) {
-               ws.close();
-           }
-           checkAuth();
-       });
-   }
-  
-   if (checkAuth()) {
-       initApp();
-   }
+      try {
+        const res = await fetch('https://api.composteur.cielnewton.fr/loginn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          sessionStorage.setItem('isAuthenticated', 'true');
+          sessionStorage.setItem('username', username);
+          // Optionnel : stocker le token d'auth
+          sessionStorage.setItem('token', data.token);
+          errorMessage.textContent = '';
+          checkAuth();
+          initApp();
+        } else {
+          errorMessage.textContent = 'Identifiants incorrects';
+          document.getElementById('password').value = '';
+        }
+      } catch (err) {
+        errorMessage.textContent = 'Erreur serveur ou réseau';
+        console.error(err);
+      }
+    });
+  }
+
+  const themeToggle = document.getElementById('theme-toggle');
+  if (themeToggle) {
+    themeToggle.addEventListener('click', toggleTheme);
+  }
+
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) {
+    logoutBtn.style.display = sessionStorage.getItem('isAuthenticated') === 'true' ? 'block' : 'none';
+    logoutBtn.addEventListener('click', () => {
+      sessionStorage.removeItem('isAuthenticated');
+      sessionStorage.removeItem('username');
+      sessionStorage.removeItem('token');
+      if (typeof ws !== 'undefined' && ws) {
+        ws.close();
+      }
+      checkAuth();
+      logoutBtn.style.display = 'none';
+    });
+  }
+
+  if (checkAuth()) {
+    initApp();
+  }
 });
 
 
@@ -693,9 +886,8 @@ function updateCharts(temperature, humidite, time) {
        return { bg: 'rgba(46, 204, 113, 0.6)', border: 'rgba(39, 174, 96, 1)' };
    };
 
-
-   const tempColors = getColors(temperature, { low: 40, high: 60 });
-   const humColors = getColors(humidite, { low: 40, high: 60 });
+   const tempColors = getColors(temperature, { low: TEMP_MIN, high: TEMP_MAX });
+   const humColors = getColors(humidite, { low: HUMIDITY_MIN, high: HUMIDITY_MAX });
   
    const maxDataPoints = 10;
   
@@ -725,7 +917,6 @@ function updateCharts(temperature, humidite, time) {
    updateTempHumidityIndicators(temperature, humidite);
 }
 
-
 function updateTempHumidityIndicators(temperature, humidity) {
    console.log('Mise à jour des indicateurs:', { temperature, humidity });
   
@@ -752,10 +943,9 @@ function updateTempHumidityIndicators(temperature, humidity) {
        console.log(`Indicateur ${id} mis à jour:`, { value, unit });
    };
   
-   updateValue('current-temp', temperature, '°C', { low: 40, high: 60 });
-   updateValue('current-humidity', humidity, '%', { low: 40, high: 60 });
+   updateValue('current-temp', temperature, '°C', { low: TEMP_MIN, high: TEMP_MAX });
+   updateValue('current-humidity', humidity, '%', { low: HUMIDITY_MIN, high: HUMIDITY_MAX });
 }
-
 
 // WebSocket communication
 function initWebSocket() {
@@ -764,7 +954,6 @@ function initWebSocket() {
        ws.close();
        ws = null;
    }
-
 
    try {
        updateConnectionStatus('websocket', 'connecting');
@@ -818,7 +1007,6 @@ function initWebSocket() {
                }, 5000);
            };
 
-
            ws.onclose = (event) => {
                clearTimeout(connectionTimeout);
                clearTimeout(dataRequestTimeout);
@@ -849,7 +1037,6 @@ function initWebSocket() {
                ws = null;
            };
 
-
            ws.onerror = (error) => {
                clearTimeout(connectionTimeout);
                clearTimeout(dataRequestTimeout);
@@ -866,7 +1053,6 @@ function initWebSocket() {
                updateConnectionStatus('websocket', 'error');
                showConnectionNotification('websocket', 'error');
            };
-
 
            ws.onmessage = (event) => {
                try {
@@ -917,7 +1103,6 @@ function initWebSocket() {
    }
 }
 
-
 function handleWebSocketMessage(data) {
    try {
        console.log('Message WebSocket reçu:', data);
@@ -932,8 +1117,55 @@ function handleWebSocketMessage(data) {
            updateTempHumidityIndicators(data.temperature, data.humidite);
        }
        // Traitement de l'état de la pompe
-       else if (data.topic === 'ma/pump') {
-           updateWaterControlState(data.state);
+       else if (data.capteur === 'pompe') {
+           const waterControl = document.getElementById('water-control');
+           if (waterControl) {
+               waterControl.disabled = false;
+               clearTimeout(waterControl.dataset.timeoutId);
+               
+               const isOn = data.etat === 'on';
+               updateWaterControlState(isOn);
+               
+               showNotification(
+                   'Succès', 
+                   `Pompe ${isOn ? 'activée' : 'désactivée'} avec succès`, 
+                   'success'
+               );
+
+               // Si la pompe est activée, on programme une vérification après 10 secondes
+               if (isOn) {
+                   setTimeout(() => {
+                       if (ws && ws.readyState === WebSocket.OPEN) {
+                           ws.send(JSON.stringify({ 
+                               type: 'get_pump_state'
+                           }));
+                           console.log('Vérification de l\'état de la pompe après 10 secondes');
+                       }
+                   }, 10000);
+               }
+           }
+       }
+       // Traitement du changement de mode
+       else if (data.mode) {
+           const isAuto = data.mode === 'auto';
+           updateModeUI(isAuto);
+           showNotification(
+               'Information',
+               `Mode ${isAuto ? 'automatique' : 'manuel'} activé`,
+               'info'
+           );
+       }
+       // Traitement de la réponse à la vérification d'état
+       else if (data.type === 'get_pump_state') {
+           const waterControl = document.getElementById('water-control');
+           if (waterControl) {
+               updateWaterControlState(false);
+               showNotification(
+                   'Information', 
+                   'La pompe a été automatiquement désactivée après 10 secondes', 
+                   'info'
+               );
+           }
        }
        // Traitement des données historiques
        else if (data.type === 'historical_data') {
@@ -947,7 +1179,6 @@ function handleWebSocketMessage(data) {
        console.error('Erreur lors du traitement du message WebSocket:', error);
    }
 }
-
 
 // Controls
 function updateWaterControlState(isActive) {
@@ -970,7 +1201,6 @@ function updateWaterControlState(isActive) {
        pumpStatus.className = `status-value ${activeState ? 'active' : 'inactive'}`;
    }
 }
-
 
 function initWaterControl() {
    const waterControl = document.getElementById('water-control');
@@ -1000,44 +1230,6 @@ function initWaterControl() {
    });
 }
 
-
-function setupPeriodSelector(select, button) {
-   if (!select || !button) return;
-
-
-   select.addEventListener('change', () => {
-       const selectedPeriod = select.value;
-       updateHistoricalTable();
-       updateHistoricalCharts(window.lastHistoricalData);
-   });
-
-
-   button.addEventListener('click', () => {
-       const selectedPeriod = select.value;
-       updateHistoricalTable();
-       updateHistoricalCharts(window.lastHistoricalData);
-   });
-}
-
-
-function setupRefreshButton(button, select) {
-   if (!button || !select) return;
-   
-   button.onclick = async () => {
-       const period = select.value;
-       const data = await fetch(`${API_URL}${period}`, {
-           method: 'POST',
-           headers: { 'Authorization': `Bearer ${TOKEN}` }
-       }).then(r => r.json());
-       
-       if (data && data.length > 0) {
-           handleHistoricalData(data, period);
-           updateHistoricalTable();
-       }
-   };
-}
-
-
 function handleHistoricalUpdate(data) {
    try {
        // Vérifier si les données sont valides
@@ -1046,7 +1238,6 @@ function handleHistoricalUpdate(data) {
            return;
        }
 
-
        // Formater les données pour la compatibilité
        const formattedData = {
            _time: data.timestamp,
@@ -1054,11 +1245,9 @@ function handleHistoricalUpdate(data) {
            humidite: parseFloat(data.humidity)
        };
 
-
        // Mettre à jour les graphiques et le tableau
        updateHistoricalCharts(formattedData);
        updateHistoricalTable(formattedData);
-
 
        // Mettre à jour le statut de connexion
        updateConnectionStatus('websocket', 'connected');
@@ -1068,7 +1257,6 @@ function handleHistoricalUpdate(data) {
        showConnectionNotification('websocket', 'error');
    }
 }
-
 
 function isJsonString(str) {
     try {

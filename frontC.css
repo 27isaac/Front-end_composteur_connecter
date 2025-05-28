@@ -937,9 +937,9 @@
  
  
  .charts-container {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 30px;
     margin-bottom: 30px;
  }
  
@@ -947,9 +947,10 @@
  .chart-card {
     background-color: var(--sensor-card-bg);
     border-radius: var(--border-radius);
-    padding: 20px;
+    padding: 25px;
     box-shadow: 0 5px 15px var(--card-shadow);
     transition: all var(--transition-speed) ease;
+    width: 100%;
  }
  
  
@@ -972,6 +973,6 @@
  
  .chart-card canvas {
     width: 100% !important;
-    height: 300px !important;
+    height: 400px !important;
  }
  
